@@ -1,0 +1,13 @@
+name,ticker,ir_url,set
+Moderna,MRNA,https://investors.modernatx.com/,test
+BioNTech,BNTX,https://investors.biontech.de/,test
+CRISPR Therapeutics,CRSP,https://ir.crisprtx.com/,test
+Beam Therapeutics,BEAM,https://investors.beamtx.com/,test
+Vertex Pharmaceuticals,VRTX,,holdout
+Regeneron Pharmaceuticals,REGN,,holdout
+Alnylam Pharmaceuticals,ALNY,,holdout
+Intellia Therapeutics,NTLA,,holdout
+Editas Medicine,EDIT,,holdout
+argenx,ARGX,,holdout
+Sarepta Therapeutics,SRPT,,holdout
+Ionis Pharmaceuticals,IONS,,holdout
