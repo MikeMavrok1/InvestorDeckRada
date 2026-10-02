@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IR Deck Finder — run report</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --surface: #ffffff; --ink: #1b1d21; --muted: #636973; --line: #dedbd3;
+    --accent: #0b6e69; --accent-soft: #e2f1ef; --ok: #1f7a43; --warn: #9a6200; --fail: #b3261e;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171a; --surface: #1e2125; --ink: #e8e6e1; --muted: #9aa0a8; --line: #33373d;
+      --accent: #58c4bc; --accent-soft: #17302f; --ok: #6cc48a; --warn: #e0ad4e; --fail: #f08a82;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 20px; margin: 0; }
+  h3 { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 26px 0 8px; font-weight: 600; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  .lede { color: var(--muted); margin: 0 0 28px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px; margin-top: 22px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th { text-align: left; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  th, td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .chip { display: inline-block; font: 12px var(--mono); padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
+  .chip.primary { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+  .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+  .meta { color: var(--muted); font-size: 13px; margin: 6px 0 0; overflow-wrap: anywhere; }
+  .pick { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; margin-top: 18px; }
+  .pick .title { font-size: 18px; font-weight: 600; line-height: 1.3; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; }
+  .facts b { font-weight: 600; }
+  .links { margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 14px; }
+  .links .main { font-weight: 600; }
+  .quote { margin: 12px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  ul.why { margin: 0; padding-left: 18px; }
+  ul.why li { margin: 2px 0; }
+  .note { color: var(--warn); }
+  .fail { color: var(--fail); font-weight: 600; }
+  details { margin-top: 18px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .trace { font: 12.5px/1.6 var(--mono); margin: 10px 0 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
+  .trace li { padding-left: 92px; text-indent: -92px; }
+  .trace .stage { display: inline-block; width: 78px; text-indent: 0; color: var(--muted); }
+  .trace .ok { color: var(--ok); } .trace .warn { color: var(--warn); } .trace .fail { color: var(--fail); }
+  .meter { display: inline-block; width: 54px; height: 6px; border-radius: 3px; background: var(--line); vertical-align: middle; margin-left: 6px; overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--accent); }
+  @media (max-width: 640px) {
+    main { padding-top: 24px; }
+    .card { padding: 16px; }
+    h1 { font-size: 23px; }
+    td:nth-child(4), th:nth-child(4) { min-width: 220px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>IR Deck Finder — run report</h1>
+  <p class="lede">Generated {{ generated }}. A presentation was found and downloaded for {{ found }} of {{ total }} companies.</p>
+
+  <div class="card">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Company</th><th>Date</th><th>Type</th><th>Presentation</th><th>Confidence</th></tr></thead>
+        <tbody>
+        {% for row in rows %}
+          <tr>
+            <td><a href="#c{{ loop.index }}">{{ row.r.company.name }}</a></td>
+            {% if row.p %}
+            <td class="num">{{ row.p.best_date or "undated" }}</td>
+            <td><span class="chip primary">{{ row.p.doc_type.value }}</span></td>
+            <td>{% if row.p_link %}<a href="{{ row.p_link }}">{{ row.p.title }}</a>{% else %}{{ row.p.title }}{% endif %}</td>
+            <td class="num">{{ "%.2f"|format(row.r.selection.confidence) }}<span class="meter"><i style="width:{{ (row.r.selection.confidence * 100)|round|int }}%"></i></span></td>
+            {% else %}
+            <td colspan="4" class="fail">{{ row.r.error or "nothing found" }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% for row in rows %}
+  {% set r = row.r %}{% set p = row.p %}
+  <section class="card" id="c{{ loop.index }}">
+    <div class="head">
+      <h2>{{ r.company.name }}</h2>
+      {% if r.company.ticker %}<span class="chip">{{ r.company.ticker }}</span>{% endif %}
+      <span class="chip">platform: {{ r.platform }}</span>
+      {% if r.llm_used %}<span class="chip">LLM used</span>{% endif %}
+    </div>
+    <p class="meta">
+      {% if r.company.ir_url %}<a href="{{ r.company.ir_url }}">{{ r.company.ir_url }}</a> · {% endif %}
+      resolved by {{ r.company.resolved_by or "—" }} · {{ r.pages_visited|length }} pages read ·
+      {{ r.candidates_found }} documents found · {{ r.elapsed_s }} s
+    </p>
+
+    {% if p %}
+    <div class="pick">
+      <div class="title">{{ p.title }}</div>
+      <ul class="facts">
+        <li><b class="num">{{ p.best_date or "undated" }}</b> <span class="chip">date from {{ p.date_source }}{% if p.date_precision != "day" %}, {{ p.date_precision }} precision{% endif %}</span></li>
+        <li><span class="chip primary">{{ p.doc_type.value }}</span></li>
+        {% if p.pdf %}<li>{{ p.pdf.pages }} pages · {{ (p.pdf.landscape_ratio * 100)|round|int }}% landscape · {{ "%.1f"|format(p.pdf.size_bytes / 1000000) }} MB</li>{% endif %}
+        <li>confidence <b class="num">{{ "%.2f"|format(r.selection.confidence) }}</b></li>
+      </ul>
+      <div class="links">
+        {% if row.p_link %}<a class="main" href="{{ row.p_link }}">Open saved PDF</a>{% endif %}
+        <a href="{{ p.url }}">Original file</a>
+        <a href="{{ p.source_page }}">Page it was found on</a>
+      </div>
+      {% if p.filename %}<p class="quote">Server filename: {{ p.filename }}</p>{% endif %}
+      {% if p.pdf and p.pdf.first_page_text %}<p class="quote">First slide: “{{ p.pdf.first_page_text[:220] }}”</p>{% endif %}
+    </div>
+
+    <h3>Why this one</h3>
+    <ul class="why">
+      {% for reason in r.selection.reasons %}<li>{{ reason }}</li>{% endfor %}
+      {% for note in row.p_notes %}<li class="note">Date check: {{ note }}</li>{% endfor %}
+      {% if row.latest %}
+      <li>Newest deck of any kind:
+        {% if row.latest_link %}<a href="{{ row.latest_link }}">{{ row.latest.title }}</a>{% else %}{{ row.latest.title }}{% endif %}
+        ({{ row.latest.best_date }}, {{ row.latest.doc_type.value }})</li>
+      {% endif %}
+    </ul>
+
+    <h3>Date evidence</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Source</th><th>Date</th><th>Precision</th><th>As written</th></tr></thead>
+        <tbody>
+        {% for e in p.date_evidence %}
+          <tr><td>{{ e.source }}</td><td class="num">{{ e.value }}</td><td>{{ e.precision }}</td><td>{{ e.raw }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if r.selection.alternates %}
+    <h3>Other recent decks considered</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Date</th><th>Type</th><th>Title</th><th>Dated by</th></tr></thead>
+        <tbody>
+        {% for c in r.selection.alternates %}
+          <tr>
+            <td class="num">{{ c.best_date }}</td>
+            <td><span class="chip">{{ c.doc_type.value }}</span></td>
+            <td><a href="{{ c.url }}">{{ c.title }}</a></td>
+            <td>{{ c.date_source }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% else %}
+    <p class="fail">{{ r.error or "No eligible presentation found." }}</p>
+    {% endif %}
+
+    <details>
+      <summary>Decision trace ({{ r.trace|length }} steps)</summary>
+      <ul class="trace">
+        {% for t in r.trace %}
+        <li class="{{ t.level }}"><span class="stage">{{ t.stage }}</span>{{ t.message }}</li>
+        {% endfor %}
+      </ul>
+    </details>
+  </section>
+  {% endfor %}
+</main>
+</body>
+</html>
