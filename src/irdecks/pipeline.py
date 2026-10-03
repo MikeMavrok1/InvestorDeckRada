@@ -12,7 +12,7 @@ from .classify import classify, type_margin
 from .dates import date_conflicts, resolve_date
 from .discover import discover
 from .extract import extract_candidates, merge
-from .feeds import q4_candidates
+from .feeds import feed_base, q4_candidates
 from .fetch import Fetcher, FetchError
 from .models import ELIGIBLE_TYPES, Candidate, DocType, RunResult
 from .platforms import fingerprint
@@ -70,42 +70,17 @@ def run_company(query: str, fetcher: Fetcher, opts: Options, trace: Trace) -> Ru
     result.platform = fingerprint(pages[0][1].text)
     trace.info("discover", f"platform looks like '{result.platform}'; read {len(pages)} pages")
 
-    cands = _extract_all(pages, opts.today)
-    if not any(c.doc_type in ELIGIBLE_TYPES for c in cands):
-        cands = _fallbacks(cands, pages, fetcher, opts, trace, result)
-    result.candidates_found = len(cands)
-    by_type: dict[str, int] = {}
-    for c in cands:
-        by_type[c.doc_type.value] = by_type.get(c.doc_type.value, 0) + 1
-    summary = ", ".join(f"{n} {t}" for t, n in sorted(by_type.items(), key=lambda kv: -kv[1]))
-    trace.info("extract", f"{len(cands)} documents found ({summary or 'none'})")
-
-    shortlist = _shortlist(cands, opts.today, opts.probe_limit)
-    for c in shortlist:
-        probe(fetcher, c)
-        classify(c)
-        resolve_date(c, opts.today)
-    trace.info("enrich", f"probed headers of {len(shortlist)} shortlisted files")
-
     out_dir = opts.out_dir / _folder(company.ticker or company.name)
-    sel = select(cands, opts.today)
-    for _ in range(6):
-        picks = {id(c): c for c in (sel.primary, sel.latest_any) if c is not None}
-        pending = [c for c in picks.values() if c.pdf is None and c.rejected is None]
-        if not pending:
-            break
-        for c in pending:
-            verify(fetcher, c, out_dir, opts.today)
-            resolve_date(c, opts.today)
-            if c.rejected:
-                trace.warn("verify", f"dropped '{c.title}': {c.rejected}")
-            else:
-                trace.ok(
-                    "verify",
-                    f"'{c.title}' is a PDF deck: {c.pdf.pages} pages, "
-                    f"{c.pdf.landscape_ratio:.0%} landscape, {c.pdf.size_bytes / 1e6:.1f} MB",
-                )
-        sel = select(cands, opts.today)
+    cands = _extract_all(pages, opts.today)
+    fell_back = not _has_eligible(cands)
+    if fell_back:
+        cands = _fallbacks(cands, pages, fetcher, opts, trace, result)
+    sel = _pick(cands, fetcher, opts, trace, result, out_dir)
+    if sel.primary is None and not fell_back:
+        # Every eligible-looking file was rejected (a notice, a portrait PDF): try the other sources.
+        trace.warn("extract", "every candidate was rejected; trying the fallbacks")
+        cands = _fallbacks(cands, pages, fetcher, opts, trace, result)
+        sel = _pick(cands, fetcher, opts, trace, result, out_dir)
 
     if opts.use_llm and sel.primary is not None and type_margin(sel.primary) < 1.5:
         _llm_second_opinion(sel.primary, trace, result)
@@ -135,6 +110,48 @@ def run_company(query: str, fetcher: Fetcher, opts: Options, trace: Trace) -> Ru
     return _finish(result, trace, started)
 
 
+def _has_eligible(cands: list[Candidate]) -> bool:
+    """A candidate of a deck-like type that verification has not thrown out."""
+    return any(c.doc_type in ELIGIBLE_TYPES and c.rejected is None for c in cands)
+
+
+def _pick(cands, fetcher: Fetcher, opts: Options, trace: Trace, result: RunResult, out_dir: Path):
+    """Shortlist and probe the candidates, then select and verify until a pick survives."""
+    result.candidates_found = len(cands)
+    by_type: dict[str, int] = {}
+    for c in cands:
+        by_type[c.doc_type.value] = by_type.get(c.doc_type.value, 0) + 1
+    summary = ", ".join(f"{n} {t}" for t, n in sorted(by_type.items(), key=lambda kv: -kv[1]))
+    trace.info("extract", f"{len(cands)} documents found ({summary or 'none'})")
+
+    shortlist = _shortlist(cands, opts.today, opts.probe_limit)
+    for c in shortlist:
+        probe(fetcher, c)
+        classify(c)
+        resolve_date(c, opts.today)
+    trace.info("enrich", f"probed headers of {len(shortlist)} shortlisted files")
+
+    sel = select(cands, opts.today)
+    for _ in range(6):
+        picks = {id(c): c for c in (sel.primary, sel.latest_any) if c is not None}
+        pending = [c for c in picks.values() if c.pdf is None and c.rejected is None]
+        if not pending:
+            break
+        for c in pending:
+            verify(fetcher, c, out_dir, opts.today)
+            resolve_date(c, opts.today)
+            if c.rejected:
+                trace.warn("verify", f"dropped '{c.title}': {c.rejected}")
+            else:
+                trace.ok(
+                    "verify",
+                    f"'{c.title}' is a PDF deck: {c.pdf.pages} pages, "
+                    f"{c.pdf.landscape_ratio:.0%} landscape, {c.pdf.size_bytes / 1e6:.1f} MB",
+                )
+        sel = select(cands, opts.today)
+    return sel
+
+
 def _extract_all(pages: list, today: date) -> list[Candidate]:
     found: list[Candidate] = []
     for url, resp in pages:
@@ -151,11 +168,12 @@ def _fallbacks(cands, pages, fetcher: Fetcher, opts: Options, trace: Trace, resu
     """Nothing usable in the static HTML: the platform's data feed, a browser, then the LLM."""
     if result.platform == "q4":
         trace.warn("extract", "no presentation links in the static HTML; reading the Q4 data feed")
-        cands = merge(cands + q4_candidates(fetcher, pages[0][0], opts.today, trace))
+        base = feed_base([resp.text for _, resp in pages], pages[0][0])
+        cands = merge(cands + q4_candidates(fetcher, base, opts.today, trace))
         for c in cands:
             classify(c)
             resolve_date(c, opts.today)
-        if any(c.doc_type in ELIGIBLE_TYPES for c in cands):
+        if _has_eligible(cands):
             return cands
     trace.warn("extract", "no presentation links found yet; trying a headless browser")
     rendered = []
@@ -177,7 +195,7 @@ def _fallbacks(cands, pages, fetcher: Fetcher, opts: Options, trace: Trace, resu
             classify(c)
             resolve_date(c, opts.today)
         pages = rendered
-    if not any(c.doc_type in ELIGIBLE_TYPES for c in cands) and opts.use_llm:
+    if not _has_eligible(cands) and opts.use_llm:
         from . import llm
 
         if llm.available():

@@ -8,7 +8,7 @@ uv sync
 uv run irdecks run --all                 # Moderna, BioNTech, CRISPR Therapeutics, Beam Therapeutics
 uv run irdecks run "Intellia Therapeutics"   # any name: resolved from scratch
 uv run irdecks run --all --offline       # replay the last run from cache, no network
-uv run pytest                            # 96 offline tests;  add --live to hit the real sites
+uv run pytest                            # 106 offline tests;  add --live to hit the real sites
 ```
 
 Each run prints a step-by-step decision trace and writes `output/report.html`,
@@ -36,7 +36,7 @@ One generic pipeline, no per-site scraper. Every stage writes to the trace.
 | Fetch | `fetch.py` | curl_cffi impersonating Chrome, per-host rate limit, robots.txt, retries, disk cache. Headless Chromium as a second tier. |
 | Discover | `discover.py` | Scores links and sitemap entries by words in the URL and anchor text, visits the best few listing pages, and follows the most recent event-detail pages. |
 | Extract | `extract.py` | Finds file links (not only `.pdf`), and reads the "row" of text around each for its title and date. Also reads file URLs out of `<script>` data. |
-| Platform feed | `feeds.py` | When the page has no presentation links and the site is a Q4 site, reads its JSON events and quarterly-results feeds (this year and last). Runs before the browser tier. |
+| Platform feed | `feeds.py` | When no deck survives (no links, or every file found was rejected) and the site is a Q4 site, reads its JSON events and quarterly-results feeds (this year and last), on the host the page's own `data-path` attribute names if it has one. Runs before the browser tier. |
 | Classify | `classify.py` | Keyword rules sort each document into corporate overview, earnings, conference, investor day, data update, scientific, transcript, press release, filing, other. |
 | Date | `dates.py` | Collects every date clue and ranks them (see below). |
 | Probe | `retrieve.py` | A 1 KB range request per shortlisted file gets the real filename, size and upload time. |
@@ -124,7 +124,9 @@ by a person opening each site, and 8 names is a small sample.
   renders argenx's JavaScript event list: 4 files instead of 1) and through a fake site. Titles on
   rendered pages are less precise. It is blocked by Cloudflare (Pfizer) and probably by any similar
   bot shield; the trace says so.
-- **Only Q4 has a platform feed adapter**, and it was verified on one company (Pfizer). Of the 13
+- **Only Q4 has a platform feed adapter**, and it was verified on two companies (Pfizer,
+  and Bristol Myers Squibb, whose feed is on a `q4web.com` host named in its page; BMS is not one of
+  the 12 and was checked by hand and offline, not with `pytest --live`). Of the 13
   sites seen, 9 are Notified, 1 is Issuer Direct and 1 is Q4. The Notified hosts answer 403
   "Access Denied" to Q4's `/feed/` paths, so the Q4 route does not apply to them; they work through
   the generic HTML extraction. Other vendors' feeds have not been looked at. A site on an unknown
