@@ -101,6 +101,16 @@ _RULES: dict[DocType, list[tuple[re.Pattern, float]]] = {
     ],
 }
 
+# Unambiguous non-deck markers. One of these in the title, link text or filename decides the
+# type outright (first match wins); deck evidence in other fields cannot outvote it. Wrongly
+# dropping a deck is cheap (the loop takes the next candidate), picking a transcript is not.
+# Soft words ("announces", "PR", "letter", "notice") stay as points: real decks carry them.
+_HARD: list[tuple[DocType, re.Pattern]] = [
+    (DocType.TRANSCRIPT, re.compile(r"\btranscript\b", I)),
+    (DocType.FILING, re.compile(r"\b(?:10-?K|10-?Q|8-?K|20-?F|6-?K|S-1|424B\d?|XBRL)\b", I)),
+    (DocType.PRESS_RELEASE, re.compile(r"\b(?:press|news)[\s_-]*release\b", I)),
+]
+
 _DECK_WORDS = re.compile(r"\b(?:presentation|slides?|deck)\b", I)
 # A link that says only this tells us nothing about the document itself.
 GENERIC_LINK = re.compile(
@@ -129,12 +139,29 @@ def classify(c: Candidate) -> None:
 
     c.is_deck_hint = any(_DECK_WORDS.search(t) for t, _ in fields if t)
     c.type_scores = {t.value: round(s, 1) for t, s in sorted(scores.items(), key=lambda kv: -kv[1])}
-    if scores:
+    hard = _hard_type(fields)
+    if hard:
+        c.doc_type = hard
+    elif scores:
         c.doc_type = max(scores, key=scores.get)
+        # "Company Reports Q3 2026 Financial Results": earnings words, a release verb and no
+        # presentation word anywhere is the press release, not the slides.
+        if (c.doc_type is DocType.EARNINGS and not c.is_deck_hint
+                and scores.get(DocType.PRESS_RELEASE)):
+            c.doc_type = DocType.PRESS_RELEASE
     elif c.is_deck_hint:
         c.doc_type = DocType.DECK  # called a presentation, but nothing says which kind
     else:
         c.doc_type = DocType.OTHER
+
+
+def _hard_type(fields: list[tuple[str, float]]) -> DocType | None:
+    """The type fixed by an unambiguous marker; the section heading (last field) is not trusted."""
+    texts = [t for t, _ in fields[:3] if t]
+    for doc_type, rx in _HARD:
+        if any(rx.search(t) for t in texts):
+            return doc_type
+    return None
 
 
 def type_margin(c: Candidate) -> float:

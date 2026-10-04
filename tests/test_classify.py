@@ -49,6 +49,29 @@ def test_filename_can_decide_an_ambiguous_title():
     assert kind(title, "BEAM-302 ERS IR webcast_v260907_FINAL_v2.pdf") is DocType.DATA_UPDATE
 
 
+def test_hard_marker_beats_deck_evidence_in_other_fields():
+    """Transcript whose filename omits the word: EARNINGS 9 + 7.2 used to outscore TRANSCRIPT 14."""
+    assert kind("Q3 2026 Earnings Call Transcript", "ACME_Q3_2026_Earnings_Call.pdf") \
+        is DocType.TRANSCRIPT
+
+
+def test_hard_marker_in_filename_only():
+    assert kind("Q3 2026 Earnings", "ACME_Q3_2026_press_release.pdf") is DocType.PRESS_RELEASE
+
+
+def test_section_heading_is_not_a_hard_marker():
+    c = Candidate(url="u", title="Corporate Presentation", section="Press Releases and Transcripts")
+    classify(c)
+    assert c.doc_type is DocType.CORPORATE
+
+
+def test_release_headline_without_presentation_word_is_a_press_release():
+    """Seen as the shape of newswire headlines: earnings words, 'Reports', no slides word."""
+    assert kind("Company Reports Q3 2026 Financial Results") is DocType.PRESS_RELEASE
+    assert kind("Company Reports Q3 2026 Financial Results Presentation") is DocType.EARNINGS
+    assert kind("Q3 2026 Financial Results") is DocType.EARNINGS
+
+
 def test_link_text_repeating_the_title_is_not_counted_twice():
     a = Candidate(url="u", title="ESC 2026 (CTX310)", link_text="ESC 2026 (CTX310)")
     b = Candidate(url="u", title="ESC 2026 (CTX310)")
