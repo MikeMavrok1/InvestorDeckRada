@@ -35,7 +35,7 @@ One generic pipeline, no per-site scraper. Every stage writes to the trace.
 | Resolve | `resolve.py` | Name → IR site. SEC EDGAR ticker list fixes the legal name and ticker; Wikidata gives the official website (matched on ticker); the home page's "Investors" link and guessed `investors.`/`ir.` hosts are opened and scored. Web search is a last resort. |
 | Fetch | `fetch.py` | curl_cffi impersonating Chrome, per-host rate limit, robots.txt, retries, disk cache. Headless Chromium as a second tier. |
 | Discover | `discover.py` | Scores links and sitemap entries by words in the URL and anchor text, visits the best few listing pages, and follows the most recent event-detail pages. |
-| Extract | `extract.py` | Finds file links (not only `.pdf`), and reads the "row" of text around each for its title and date. Also reads file URLs out of `<script>` data. |
+| Extract | `extract.py` | Finds file links (not only `.pdf`), and reads the "row" of text around each for its title and date. Also reads file URLs out of `<script>` data, and HTML kept as strings in the page's JSON data (Next.js `__NEXT_DATA__`). In a grid with one file per column, the title is the row header plus the column header ("Presentation – Q2 2026"). |
 | Platform feed | `feeds.py` | When no deck survives (no links, or every file found was rejected) and the site is a Q4 site, reads its JSON events and quarterly-results feeds (this year and last), on the host the page's own `data-path` attribute names if it has one. Runs before the browser tier. |
 | Classify | `classify.py` | Keyword rules sort each document into corporate overview, earnings, conference, investor day, data update, scientific, transcript, press release, filing, other. |
 | Date | `dates.py` | Collects every date clue and ranks them (see below). |
@@ -142,6 +142,27 @@ by a person opening each site, and 8 names is a small sample.
 - Numeric dates are read in US order unless the first number is above 12.
 - Keyword rules are English-only.
 
+## Web UI
+
+An optional Streamlit front end over the same pipeline (`src/irdecks/webui.py`). It changes
+nothing about how a deck is chosen; it shows the `RunResult`.
+
+```
+uv sync --extra web          # add --extra browser to keep the headless-browser tier too
+uv run irdecks serve         # http://localhost:8501  (--port to change)
+```
+
+Sidebar: a name or IR-site box, buttons for the four test companies, and an **Offline (replay
+from cache)** switch (the CLI's `--offline`; it also turns the LLM fallback off). A run shows a
+spinner, then the pick, why it was chosen, the
+candidates (pick, latest of any kind, alternates) with why each won or lost, every date clue with
+its rank and any disagreement over 45 days, the cover-slide text, the PDF (download, page count,
+orientation, link to the original) and the full trace. Failures (nothing found, a bot challenge
+on the browser tier, an offline cache miss) show a message, not a stack trace. Only the pick,
+`latest_any` and up to six alternates are in a result, so those are the candidates listed.
+
+`uv run pytest tests/test_webui.py` drives the app with `streamlit.testing.v1`, offline.
+
 ## Scaling to 1,000+ companies
 
 - **Cost today:** about 18 requests and 20 seconds per company cold, limited by a 1 request/second
@@ -169,6 +190,9 @@ by a person opening each site, and 8 names is a small sample.
 ## Notes on access
 
 Every web page fetch obeys robots.txt and the per-host delay; responses are cached for 12 hours.
+robots.txt is read the RFC 9309 way (protego): the longest matching rule wins. Python's
+`urllib.robotparser` takes the first one, and that refused Bayer's deck, whose file host says
+`Disallow: /` above `Allow: /api/public/`.
 SEC EDGAR's ticker file and the Wikidata API are called as the machine APIs they are. SEC asks
 automated clients to identify themselves with a contact address in the User-Agent. This prototype
 does not do that yet and should before it runs at volume.

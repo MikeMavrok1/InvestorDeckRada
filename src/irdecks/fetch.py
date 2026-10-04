@@ -19,9 +19,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.robotparser import RobotFileParser
 
 from curl_cffi import requests as cffi
+from protego import Protego
 
 
 class FetchError(Exception):
@@ -77,7 +77,7 @@ class Fetcher:
         self.respect_robots = respect_robots
         self.session = cffi.Session(impersonate="chrome")
         self._last_hit: dict[str, float] = {}
-        self._robots: dict[str, RobotFileParser | None] = {}
+        self._robots: dict[str, Protego | None] = {}
         self.requests_made = 0
         self.cache_hits = 0
 
@@ -203,21 +203,21 @@ class Fetcher:
         self._last_hit[host] = time.monotonic()
 
     def _allowed(self, url: str) -> bool:
+        """RFC 9309: the longest matching rule wins. urllib.robotparser takes the first one,
+        so 'Disallow: /' above 'Allow: /api/public/' would block every file on the host."""
         parts = urlsplit(url)
         host = parts.netloc
         if host not in self._robots:
-            rp: RobotFileParser | None = RobotFileParser()
+            rp: Protego | None = None  # no robots.txt: nothing is disallowed
             try:
                 r = self._http(f"{parts.scheme}://{host}/robots.txt", None, None)
                 if r.ok and "text" in r.headers.get("content-type", "text"):
-                    rp.parse(r.text.splitlines())
-                else:
-                    rp = None  # no robots.txt: nothing is disallowed
+                    rp = Protego.parse(r.text)
             except FetchError:
-                rp = None
+                pass
             self._robots[host] = rp
         rp = self._robots[host]
-        return True if rp is None else rp.can_fetch("*", url)
+        return True if rp is None else rp.can_fetch(url, "*")
 
     # -- cache ------------------------------------------------------------------
 
