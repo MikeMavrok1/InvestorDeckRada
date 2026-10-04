@@ -97,7 +97,7 @@ def run_company(query: str, fetcher: Fetcher, opts: Options, trace: Trace) -> Ru
         if p.date_note:
             trace.warn("select", f"date check: {p.date_note}")
         else:
-            for note in date_conflicts(p):
+            for note in date_conflicts(p, opts.today):
                 trace.warn("select", f"date check: {note}")
         trace.ok(
             "select",

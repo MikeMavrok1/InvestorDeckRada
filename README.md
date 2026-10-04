@@ -64,7 +64,9 @@ the file: server filename "Q3 2026 Corporate Deck", cover slide "August 3rd, 202
 is also attached to the J.P. Morgan event of 13 January 2026. Beam replaced the file in place: the
 filename, upload time, PDF metadata and cover slide all say August 2026. Trusting the listing would
 have dated the deck seven months too early, so when at least two clues from the file agree it is
-newer than the listing, the file wins and the report says so.
+newer than the listing, the file wins and the report says so. One of them must be written by a
+person (filename or cover slide): upload time and PDF metadata alone can both move when a CMS
+re-processes old files.
 
 **Bot filtering.** The three Akamai-fronted sites reset the connection when the User-Agent says
 Chrome but the TLS handshake does not look like Chrome. Plain `curl`, `requests` and PowerShell all

@@ -143,6 +143,8 @@ def classify(c: Candidate) -> None:
     if hard:
         c.doc_type = hard
     elif scores:
+        # A tie goes to the type listed first in _RULES (deck types first, in ELIGIBLE_TYPES
+        # order); type_margin() is then 0, which lowers confidence and asks the LLM.
         c.doc_type = max(scores, key=scores.get)
         # "Company Reports Q3 2026 Financial Results": earnings words, a release verb and no
         # presentation word anywhere is the press release, not the slides.
