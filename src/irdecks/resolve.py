@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlencode, urljoin, urls
 
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
+from rapidfuzz.distance import Levenshtein
 
 from .discover import score_link
 from .fetch import Fetcher, FetchError
@@ -54,6 +55,21 @@ def _norm(name: str) -> str:
     name = re.sub(r"/.*$", "", name.lower())  # SEC titles like "VERTEX ... INC / MA"
     name = re.sub(r"[^a-z0-9 ]+", " ", name)
     return re.sub(r"\s+", " ", _SUFFIXES.sub(" ", name)).strip()
+
+
+def _same_word(a: str, b: str) -> bool:
+    """Equal, or one typo apart when the word is long enough that this is not luck."""
+    return a == b or (len(a) >= 6 and Levenshtein.distance(a, b) <= 1)
+
+
+def _shares_word(q: str, title: str) -> bool:
+    """Guard for fuzzy name matches: query and title must have a whole word in common (one
+    typo allowed in long words). The query with its spaces removed also counts, so that
+    "bio ntech" still finds "biontech". No substring ever counts."""
+    q_words, t_words = q.split(), title.split()
+    if q.replace(" ", "") not in q_words:
+        q_words.append(q.replace(" ", ""))
+    return any(_same_word(a, b) for a in q_words for b in t_words)
 
 
 # -- 1. overrides ------------------------------------------------------------------
@@ -94,9 +110,13 @@ def _from_sec(query: str, fetcher: Fetcher, trace: Trace) -> tuple[str, str | No
         if q == title or q == row["ticker"].lower():
             best, best_score = row, 100.0
             break
-        s = fuzz.WRatio(q, title)
+        # Whole-string similarity only: WRatio also scores partial matches, which made
+        # "roche" match "SINOPEC SHANGHAI PETROCHEMICAL" (90) via the letters in "petrochemical".
+        s = fuzz.ratio(q, title)
         if title.startswith(q + " "):
             s = max(s, 95)
+        if not _shares_word(q, title):
+            continue
         if s > best_score:
             best, best_score = row, s
     if best is None or best_score < 88:

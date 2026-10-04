@@ -64,7 +64,9 @@ def run(
     for name in todo:
         if not quiet:
             console.rule(f"[bold]{name}")
-        results.append(run_company(name, fetcher, opts, Trace(console, live=not quiet)))
+        trace = Trace(console, live=not quiet)
+        fetcher.on_event = lambda msg, t=trace: t.info("fetch", msg)
+        results.append(run_company(name, fetcher, opts, trace))
 
     console.print()
     console.print(_summary(results))

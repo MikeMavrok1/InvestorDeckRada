@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -63,7 +64,11 @@ class Fetcher:
         min_interval: float = 1.0,
         timeout: float = 40.0,
         respect_robots: bool = True,
+        connect_timeout: float = 10.0,
     ):
+        self.connect_timeout = connect_timeout
+        self.on_event: Callable[[str], None] | None = None  # live progress, set by the CLI
+        self._dead: dict[str, str] = {}  # hosts that failed to answer at all this run
         self.cache_dir = cache_dir
         self.offline = offline
         self.max_age_s = max_age_hours * 3600
@@ -114,15 +119,21 @@ class Fetcher:
         hdrs = dict(headers or {})
         if byte_range:
             hdrs["Range"] = f"bytes={byte_range[0]}-{byte_range[1]}"
+        host = urlsplit(url).netloc
+        if host in self._dead:
+            raise FetchError(f"host already failed to answer: {self._dead[host]}")
         last_err: Exception | None = None
         for attempt in range(3):
             self._throttle(url)
+            self._say(f"GET {url}" if attempt == 0 else f"retry {attempt} of {url}")
             try:
                 r = self.session.get(
-                    url, headers=hdrs, timeout=self.timeout, allow_redirects=True
+                    url, headers=hdrs, timeout=(self.connect_timeout, self.timeout),
+                    allow_redirects=True,
                 )
                 self.requests_made += 1
                 if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                    self._say(f"HTTP {r.status_code} from {host}, retrying")
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 return Response(
@@ -134,8 +145,18 @@ class Fetcher:
                 )
             except Exception as e:  # curl errors: resets, timeouts, DNS
                 last_err = e
-                time.sleep(1.5 * (attempt + 1))
+                reason = f"{type(e).__name__}: {str(e)[:80]}"
+                if attempt == 0:  # one retry for a transient reset, none after that
+                    self._say(f"{host} did not answer ({reason}); retrying once")
+                    time.sleep(1.5)
+                    continue
+                break
+        self._dead[host] = f"{type(last_err).__name__}"
         raise FetchError(f"{type(last_err).__name__}: {str(last_err)[:160]}")
+
+    def _say(self, message: str) -> None:
+        if self.on_event:
+            self.on_event(message)
 
     def _render(self, url: str) -> Response:
         try:
