@@ -92,6 +92,20 @@ def run(
         raise typer.Exit(1)
 
 
+@app.command()
+def serve(port: int = typer.Option(8501, help="Port for the web UI.")) -> None:
+    """Open the Streamlit web UI (install it with: uv sync --extra web)."""
+    import importlib.util
+    import subprocess
+
+    if importlib.util.find_spec("streamlit") is None:
+        typer.echo("The web UI needs Streamlit: run `uv sync --extra web` first.", err=True)
+        raise typer.Exit(1)
+    script = importlib.util.find_spec("irdecks.webui").origin
+    cmd = [sys.executable, "-m", "streamlit", "run", script, "--server.port", str(port)]
+    raise typer.Exit(subprocess.call(cmd))
+
+
 def _summary(results: list[RunResult]) -> Table:
     table = Table(title="Latest corporate presentation", title_justify="left", show_lines=False)
     for col in ("Company", "Date", "Type", "Presentation", "Conf.", "Saved file"):
