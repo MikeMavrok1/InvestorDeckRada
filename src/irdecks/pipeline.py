@@ -126,7 +126,10 @@ def _pick(cands, fetcher: Fetcher, opts: Options, trace: Trace, result: RunResul
 
     shortlist = _shortlist(cands, opts.today, opts.probe_limit)
     for c in shortlist:
-        probe(fetcher, c)
+        if c.rejected is None:  # a second round does not re-probe what the first threw out
+            probe(fetcher, c)
+            if c.rejected:
+                trace.warn("enrich", f"dropped '{c.title}': {c.rejected}")
         classify(c)
         resolve_date(c, opts.today)
     trace.info("enrich", f"probed headers of {len(shortlist)} shortlisted files")

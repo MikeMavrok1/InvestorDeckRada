@@ -99,6 +99,17 @@ def test_portrait_file_is_rejected_and_the_next_deck_is_taken(tmp_path):
     assert any("portrait" in e.message for e in result.trace)
 
 
+def test_a_file_dropped_at_the_probe_says_why_once(tmp_path):
+    """Seen on Bayer (5 Oct 2026): the only deck was refused at the header probe and the trace
+    went from 'probed headers of 1' to 'every candidate was rejected' without a reason."""
+    listing = """<html><h1>Presentations</h1>
+      <div><span>September 9, 2026</span> <a href="/files/gone.pdf">Corporate Presentation</a></div></html>"""
+    result = run(FakeSite({ROOT: HOME, ROOT + "presentations": listing}), tmp_path)
+    assert result.error == "no eligible presentation found"
+    drops = [e for e in result.trace if e.message.startswith("dropped 'Corporate Presentation'")]
+    assert [(e.stage, e.message.split(": ", 1)[1]) for e in drops] == [("enrich", "HTTP 404")]
+
+
 def test_javascript_only_list_falls_back_to_the_browser(tmp_path):
     rendered = """<html><h1>Presentations</h1><div id="list">
       <div><span>September 9, 2026</span> <a href="/files/corp.pdf">Corporate Presentation</a></div></div></html>"""

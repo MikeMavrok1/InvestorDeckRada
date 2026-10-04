@@ -115,7 +115,8 @@ _DECK_WORDS = re.compile(r"\b(?:presentation|slides?|deck)\b", I)
 # A link that says only this tells us nothing about the document itself.
 GENERIC_LINK = re.compile(
     r"^(?:download|view|open|pdf|here|click here|read on|read more|learn more|link|file|"
-    r"(?:download|view|open)\s+(?:the\s+)?(?:pdf|file|presentation|slides|here))\W*$", I,
+    r"(?:download|view|open)\s+(?:the\s+)?(?:pdf|file|document|presentation|slides|here))\W*$",
+    I,
 )
 
 
