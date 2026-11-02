@@ -88,6 +88,34 @@ def test_file_replaced_in_place_overrides_the_listing_date():
     assert "replaced" in c.date_note
 
 
+def test_metadata_alone_does_not_prove_a_replacement():
+    """A CMS that re-processes old files moves CreationDate and Last-Modified together."""
+    c = _cand(
+        ("listing", date(2026, 1, 13), "day"),
+        ("pdf_meta", date(2026, 8, 20), "day"),
+        ("last_modified", date(2026, 8, 21), "day"),
+    )
+    assert (c.best_date, c.date_source, c.date_note) == (date(2026, 1, 13), "listing", None)
+
+
+def test_dotted_numeric_dates_are_us_order():
+    """Moderna '2Q20-Earnings-Call-(08.05.20)' is 5 Aug 2020; Amgen 'JP Morgan ... (01.12.26)'
+    is 12 Jan 2026. Both are US sites; no day-first dotted date was seen on any site."""
+    assert find_dates("JP Morgan Healthcare Conference Presentation (01.12.26 0900AM)")[0].value \
+        == date(2026, 1, 12)
+
+
+def test_conflicts_ignore_discarded_future_clues():
+    c = _cand(("listing", date(2026, 8, 4), "day"), ("title", date(2027, 3, 1), "month"))
+    assert date_conflicts(c, TODAY) == []
+
+
+def test_conflicts_compare_clues_from_the_winning_source():
+    c = _cand(("listing", date(2026, 8, 4), "day"), ("listing", date(2026, 1, 13), "day"))
+    assert c.best_date == date(2026, 1, 13)
+    assert any("2026-08-04" in n for n in date_conflicts(c, TODAY))
+
+
 def test_deck_shown_at_several_events_takes_the_earliest():
     """Seen on a hold-out site: one corporate deck attached to an August and a September event."""
     c = _cand(
@@ -107,4 +135,4 @@ def test_one_late_upload_alone_does_not_override_the_listing():
     """A site migration re-stamps Last-Modified on old files; one clue is not enough."""
     c = _cand(("listing", date(2025, 1, 13), "day"), ("last_modified", date(2026, 8, 4), "day"))
     assert (c.best_date, c.date_note) == (date(2025, 1, 13), None)
-    assert date_conflicts(c)
+    assert date_conflicts(c, TODAY)

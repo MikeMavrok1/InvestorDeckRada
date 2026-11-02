@@ -8,7 +8,8 @@ uv sync
 uv run irdecks run --all                 # Moderna, BioNTech, CRISPR Therapeutics, Beam Therapeutics
 uv run irdecks run "Intellia Therapeutics"   # any name: resolved from scratch
 uv run irdecks run --all --offline       # replay the last run from cache, no network
-uv run pytest                            # 96 offline tests;  add --live to hit the real sites
+uv run pytest                            # 125 offline tests (138 with the web extra); --live hits the real sites
+uv sync --extra web && uv run irdecks serve   # optional web UI, see "Web UI" below
 ```
 
 Each run prints a step-by-step decision trace and writes `output/report.html`,
@@ -33,11 +34,11 @@ One generic pipeline, no per-site scraper. Every stage writes to the trace.
 | Stage | Module | What it does |
 |---|---|---|
 | Resolve | `resolve.py` | Name → IR site. SEC EDGAR ticker list fixes the legal name and ticker; Wikidata gives the official website (matched on ticker); the home page's "Investors" link and guessed `investors.`/`ir.` hosts are opened and scored. Web search is a last resort. |
-| Fetch | `fetch.py` | curl_cffi impersonating Chrome, per-host rate limit, robots.txt, retries, disk cache. Headless Chromium as a second tier. |
+| Fetch | `fetch.py` | curl_cffi impersonating Chrome, per-host rate limit, robots.txt, retries, disk cache. A host that does not answer at all is skipped for the rest of the run. Headless Chromium as a second tier. |
 | Discover | `discover.py` | Scores links and sitemap entries by words in the URL and anchor text, visits the best few listing pages, and follows the most recent event-detail pages. |
-| Extract | `extract.py` | Finds file links (not only `.pdf`), and reads the "row" of text around each for its title and date. Also reads file URLs out of `<script>` data. |
-| Platform feed | `feeds.py` | When the page has no presentation links and the site is a Q4 site, reads its JSON events and quarterly-results feeds (this year and last). Runs before the browser tier. |
-| Classify | `classify.py` | Keyword rules sort each document into corporate overview, earnings, conference, investor day, data update, scientific, transcript, press release, filing, other. |
+| Extract | `extract.py` | Finds file links (not only `.pdf`), and reads the "row" of text around each for its title and date. Also reads file URLs out of `<script>` data, and HTML kept as strings in the page's JSON data (Next.js `__NEXT_DATA__`). In a grid with one file per column, the title is the row header plus the column header ("Presentation – Q2 2026"). |
+| Platform feed | `feeds.py` | When no deck survives (no links, or every file found was rejected) and the site is a Q4 site, reads its JSON events and quarterly-results feeds (this year and last), on the host the page's own `data-path` attribute names if it has one. Runs before the browser tier. |
+| Classify | `classify.py` | Keyword rules sort each document into corporate overview, earnings, conference, investor day, data update, scientific, transcript, press release, filing, other. "Transcript", "press release" or an SEC form (10-Q, 8-K…) in the title, link text or filename decides the type outright: deck words elsewhere cannot outvote it. |
 | Date | `dates.py` | Collects every date clue and ranks them (see below). |
 | Probe | `retrieve.py` | A 1 KB range request per shortlisted file gets the real filename, size and upload time. |
 | Select | `select.py` | The rule for "correct and most recent" (see below). |
@@ -64,7 +65,9 @@ the file: server filename "Q3 2026 Corporate Deck", cover slide "August 3rd, 202
 is also attached to the J.P. Morgan event of 13 January 2026. Beam replaced the file in place: the
 filename, upload time, PDF metadata and cover slide all say August 2026. Trusting the listing would
 have dated the deck seven months too early, so when at least two clues from the file agree it is
-newer than the listing, the file wins and the report says so.
+newer than the listing, the file wins and the report says so. One of them must be written by a
+person (filename or cover slide): upload time and PDF metadata alone can both move when a CMS
+re-processes old files.
 
 **Bot filtering.** The three Akamai-fronted sites reset the connection when the User-Agent says
 Chrome but the TLS handshake does not look like Chrome. Plain `curl`, `requests` and PowerShell all
@@ -124,8 +127,10 @@ by a person opening each site, and 8 names is a small sample.
   renders argenx's JavaScript event list: 4 files instead of 1) and through a fake site. Titles on
   rendered pages are less precise. It is blocked by Cloudflare (Pfizer) and probably by any similar
   bot shield; the trace says so.
-- **Only Q4 has a platform feed adapter**, and it was verified on one company (Pfizer). Of the 13
-  sites seen, 9 are Notified, 1 is Issuer Direct and 1 is Q4. The Notified hosts answer 403
+- **Only Q4 has a platform feed adapter**, and it was verified on two companies (Pfizer,
+  and Bristol Myers Squibb, whose feed is on a `q4web.com` host named in its page; BMS is not one of
+  the 12 and was checked by hand and offline, not with `pytest --live`). Of the 12 companies
+  plus Pfizer, 9 are Notified, 1 is Issuer Direct and 1 is Q4. The Notified hosts answer 403
   "Access Denied" to Q4's `/feed/` paths, so the Q4 route does not apply to them; they work through
   the generic HTML extraction. Other vendors' feeds have not been looked at. A site on an unknown
   platform that builds its list with JavaScript behind a bot shield still ends in "no eligible
@@ -137,6 +142,31 @@ by a person opening each site, and 8 names is a small sample.
 - Only the first page of a paginated list is read, on the assumption that newest comes first.
 - Numeric dates are read in US order unless the first number is above 12.
 - Keyword rules are English-only.
+
+## Web UI
+
+An optional Streamlit front end over the same pipeline (`src/irdecks/webui.py`). It changes
+nothing about how a deck is chosen; it shows the `RunResult`.
+
+```
+uv sync --extra web          # add --extra browser to keep the headless-browser tier too
+uv run irdecks serve         # http://localhost:8501  (--port to change)
+```
+
+Sidebar: a name or IR-site box, buttons for the four test companies, and an **Offline (replay
+from cache)** switch (the CLI's `--offline`; it also turns the LLM fallback off). A run shows a
+spinner, then the pick, why it was chosen, the
+candidates (pick, latest of any kind, alternates) with why each won or lost, every date clue with
+its rank and any disagreement over 45 days, the cover-slide text, the PDF (download, page count,
+orientation, link to the original) and the full trace. Failures (nothing found, a bot challenge
+on the browser tier, an offline cache miss) show a message, not a stack trace. Only the pick,
+`latest_any` and up to six alternates are in a result, so those are the candidates listed.
+A UI run saves the PDF under `output/<TICKER>/` like the CLI, but does not write `report.html` or
+`manifest.json`. Start it from the repository root: it reads `companies.csv` and `output/cache`
+there (`IRDECKS_OUT_DIR` moves the output folder).
+
+`uv run pytest tests/test_webui.py` drives the app with `streamlit.testing.v1`, offline (13 tests);
+without the web extra the file is skipped.
 
 ## Scaling to 1,000+ companies
 
@@ -165,6 +195,9 @@ by a person opening each site, and 8 names is a small sample.
 ## Notes on access
 
 Every web page fetch obeys robots.txt and the per-host delay; responses are cached for 12 hours.
+robots.txt is read the RFC 9309 way (protego): the longest matching rule wins. Python's
+`urllib.robotparser` takes the first one, and that refused Bayer's deck, whose file host says
+`Disallow: /` above `Allow: /api/public/`.
 SEC EDGAR's ticker file and the Wikidata API are called as the machine APIs they are. SEC asks
 automated clients to identify themselves with a contact address in the User-Agent. This prototype
 does not do that yet and should before it runs at volume.

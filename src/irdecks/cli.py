@@ -64,7 +64,9 @@ def run(
     for name in todo:
         if not quiet:
             console.rule(f"[bold]{name}")
-        results.append(run_company(name, fetcher, opts, Trace(console, live=not quiet)))
+        trace = Trace(console, live=not quiet)
+        fetcher.on_event = lambda msg, t=trace: t.info("fetch", msg)
+        results.append(run_company(name, fetcher, opts, trace))
 
     console.print()
     console.print(_summary(results))
@@ -88,6 +90,20 @@ def run(
         console.print(f"Report: [bold]{path}[/bold]   Manifest: {out / 'manifest.json'}")
     if any(r.error for r in results):
         raise typer.Exit(1)
+
+
+@app.command()
+def serve(port: int = typer.Option(8501, help="Port for the web UI.")) -> None:
+    """Open the Streamlit web UI (install it with: uv sync --extra web)."""
+    import importlib.util
+    import subprocess
+
+    if importlib.util.find_spec("streamlit") is None:
+        typer.echo("The web UI needs Streamlit: run `uv sync --extra web` first.", err=True)
+        raise typer.Exit(1)
+    script = importlib.util.find_spec("irdecks.webui").origin
+    cmd = [sys.executable, "-m", "streamlit", "run", script, "--server.port", str(port)]
+    raise typer.Exit(subprocess.call(cmd))
 
 
 def _summary(results: list[RunResult]) -> Table:

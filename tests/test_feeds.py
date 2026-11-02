@@ -3,10 +3,11 @@
 import json
 from datetime import date
 
+import pytest
 from conftest import FIXTURES
-from test_pipeline import HOME, ROOT, SLIDES, FakeSite, run
+from test_pipeline import HOME, PORTRAIT, ROOT, SLIDES, FakeSite, run
 
-from irdecks.feeds import feed_url, parse_events, parse_reports
+from irdecks.feeds import feed_base, feed_url, parse_events, parse_reports
 from irdecks.fetch import Response
 
 Q2_DECK = "https://s206.q4cdn.com/795948973/files/doc_financials/2026/q2/Q2-2026-Earnings-Charts-FINAL.pdf"
@@ -73,3 +74,77 @@ def test_a_blocked_browser_is_reported_and_its_challenge_page_is_not_used(tmp_pa
     assert result.error == "no eligible presentation found"
     assert any("browser render blocked: HTTP 403 (bot challenge)" in e.message for e in result.trace)
     assert len(site.rendered_urls) == 1  # stops at the first block instead of trying every page
+
+
+BMS_HOST = "https://bristolmyers2016ir.q4web.com/"
+BMS = "https://www.bms.com/assets/bms/us/en-us/pdf/"
+BMS_Q2_DECK = BMS + "investor-info/doc_presentations/2026/BMY-2026-Q2-Results-Investor-Presentation.pdf"
+
+
+@pytest.mark.parametrize(
+    "fixture, expected",
+    [
+        ("bms_events", BMS_HOST),  # company domain, feed on <tenant>.q4web.com
+        ("alnylam_events", ROOT),  # Q4 files, but no feed markup on the page
+        ("jci_events", ROOT),
+        ("moderna_events", ROOT),
+        ("biontech_events", ROOT),
+        ("crispr_presentations", ROOT),
+        ("beam_events", ROOT),
+    ],
+)
+def test_feed_base_follows_the_markup_and_leaves_other_sites_alone(fixture, expected):
+    """Pages saved on 2 Oct 2026. The four test sites name no feed host, so they keep their own."""
+    html = (FIXTURES / f"{fixture}.html").read_text(encoding="utf-8", errors="replace")
+    base = feed_base([html], ROOT)
+    assert base == expected
+
+
+def bms_site(**extra) -> FakeSite:
+    """Seen on www.bms.com: the static page lists one notice PDF; the decks come from the Q4 feed."""
+    read = lambda name: (FIXTURES / name).read_text(encoding="utf-8", errors="replace")
+    pages = {ROOT: read("bms_home.html"), ROOT + "investors/events-and-presentations.html": read("bms_events.html")}
+    for kind, name in (("events", "bms_q4_events.json"), ("reports", "bms_q4_reports.json")):
+        pages[feed_url(BMS_HOST, kind, 2026)] = (FIXTURES / name).read_text(encoding="utf-8")
+    files = {
+        BMS + "abraxane-cvr-notification.pdf": (PORTRAIT, "Mon, 01 Jun 2026 10:00:00 GMT"),
+        BMS_Q2_DECK: (SLIDES, "Thu, 30 Jul 2026 10:46:21 GMT"),
+    }
+    return FakeSite(pages, files=files, **extra)
+
+
+def test_rejected_notice_sends_the_run_to_the_feed_on_the_host_named_in_the_page(tmp_path):
+    """Seen on www.bms.com: the only file in the HTML is a notice, and /feed/ is not on that host."""
+    site = bms_site()
+    result = run(site, tmp_path)
+    assert result.platform == "q4"
+    messages = [e.message for e in result.trace]
+    assert any("portrait" in m for m in messages)  # the notice was fetched and thrown out
+    assert any("every candidate was rejected" in m for m in messages)
+    assert result.error is None
+    assert result.selection.primary.url == BMS_Q2_DECK
+    assert result.selection.primary.best_date == date(2026, 7, 30)
+    assert site.rendered_urls == []
+
+
+def test_a_verified_pick_never_triggers_the_fallbacks(tmp_path):
+    """The extra round only follows a failed pick: sites that work pay nothing for it."""
+    site = FakeSite(
+        {ROOT: HOME, ROOT + "presentations": '<div><span>September 9, 2026</span> <a href="/f/c.pdf">Corporate Presentation</a></div>'},
+        files={ROOT + "f/c.pdf": (SLIDES, "Wed, 09 Sep 2026 12:00:00 GMT")},
+    )
+    result = run(site, tmp_path)
+    assert result.selection.primary.title == "Corporate Presentation"
+    assert not any("fallbacks" in e.message or "feed" in e.message for e in result.trace)
+
+
+def test_when_the_fallbacks_find_nothing_either_the_run_still_fails_cleanly(tmp_path):
+    """A rejected portrait file and no other source: one extra round, then the usual error."""
+    listing = '<div><span>September 9, 2026</span> <a href="/f/c.pdf">Corporate Presentation</a></div>'
+    site = FakeSite(
+        {ROOT: HOME, ROOT + "presentations": listing},
+        files={ROOT + "f/c.pdf": (PORTRAIT, "Wed, 09 Sep 2026 12:00:00 GMT")},
+    )
+    result = run(site, tmp_path)
+    assert result.error == "no eligible presentation found"
+    assert sum("every candidate was rejected" in e.message for e in result.trace) == 1

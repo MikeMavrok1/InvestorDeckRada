@@ -184,6 +184,9 @@ _RANK = {
 
 
 _FILE_SOURCES = {"filename", "pdf_text", "pdf_meta", "last_modified"}
+# Written by a person. pdf_meta and last_modified can move together when a CMS re-processes
+# or re-uploads old files, so they never prove a replacement on their own.
+_AUTHORED_SOURCES = {"filename", "pdf_text"}
 REPLACED_AFTER_DAYS = 45
 
 
@@ -195,14 +198,17 @@ def add_evidence(c: Candidate, source: str, hit: DateHit | None) -> None:
         c.date_evidence.append(ev)
 
 
-def resolve_date(c: Candidate, today: date | None = None) -> None:
-    """Pick the most trustworthy date for a candidate and record where it came from."""
-    today = today or date.today()
-    usable = [
+def _usable(c: Candidate, today: date) -> list[DateEvidence]:
+    return [
         e for e in c.date_evidence
         # A deck cannot be dated in the future; such "dates" are fiscal labels or typos.
         if (e.source, e.precision) in _RANK and (e.value - today).days <= 3
     ]
+
+
+def resolve_date(c: Candidate, today: date | None = None) -> None:
+    """Pick the most trustworthy date for a candidate and record where it came from."""
+    usable = _usable(c, today or date.today())
     if not usable:
         c.best_date = c.date_source = c.date_precision = None
         return
@@ -212,13 +218,15 @@ def resolve_date(c: Candidate, today: date | None = None) -> None:
     if best.source in ("listing", "event_page", "shared_row"):
         # Some sites keep one URL for a standing deck and swap the file in place, so an
         # old event still "lists" what is now a newer deck. When at least two independent
-        # clues from the file itself agree it is materially newer, believe the file.
+        # clues from the file itself agree it is materially newer, one of them written by a
+        # person, believe the file.
         file_ev = [e for e in usable if e.source in _FILE_SOURCES and e.precision != "quarter"]
         newer = [e for e in file_ev if (e.value - best.value).days > REPLACED_AFTER_DAYS]
         if (
             newer
             and len(newer) == len(file_ev)
             and len({e.source for e in newer}) >= 2
+            and any(e.source in _AUTHORED_SOURCES for e in newer)
             and (max(e.value for e in newer) - min(e.value for e in newer)).days <= 45
         ):
             c.date_note = (
@@ -243,13 +251,19 @@ def resolve_date(c: Candidate, today: date | None = None) -> None:
     c.date_precision = best.precision
 
 
-def date_conflicts(c: Candidate, tolerance_days: int = 45) -> list[str]:
-    """Human-readable notes where two day/month clues disagree materially."""
+def date_conflicts(
+    c: Candidate, today: date | None = None, tolerance_days: int = 45
+) -> list[str]:
+    """Human-readable notes where a usable day/month clue disagrees with the chosen date.
+
+    Same evidence filter as resolve_date, so discarded future labels are not reported. Clues
+    from the winning source are compared too: two listings months apart are worth seeing.
+    """
     notes: list[str] = []
     if not c.best_date:
         return notes
-    for e in c.date_evidence:
-        if e.precision == "quarter" or e.source == c.date_source:
+    for e in _usable(c, today or date.today()):
+        if e.precision == "quarter":
             continue
         gap = abs((e.value - c.best_date).days)
         if gap > tolerance_days:

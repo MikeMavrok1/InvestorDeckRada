@@ -144,3 +144,27 @@ def test_sibling_files_of_one_event_share_its_date_but_keep_their_role():
     assert by_url["q2.pdf"].title == "Q2 2026 Earnings Call – Slides"
     assert by_url["q2-transcript.pdf"].title.endswith("– Transcript")
     assert all(c.date_evidence[0].value == date(2026, 8, 5) for c in cands)
+
+
+def test_a_results_grid_inside_the_page_json_is_read():
+    """Seen on Bayer (5 Oct 2026, Next.js + Sitecore Content Hub): the quarterly table lives
+    only in __NEXT_DATA__ as an HTML string, every link says 'View Document', the file URLs
+    have no extension, and the quarter is in the column header."""
+    import json
+
+    grid = """<table><thead><tr><th>2026</th><th>Q1</th><th>Q2</th></tr></thead><tbody>
+      <tr><td><strong>Presentation</strong></td>
+        <td><a href="https://dam.x.test/api/public/content/q1-deck-e322?v=fd"><strong>View Document</strong></a> (1.66 MB)</td>
+        <td><a href="https://dam.x.test/api/public/content/q2-deck-b213?v=5e"><strong>View Document</strong></a> (1.83 MB)</td></tr>
+      <tr><td>Annual Report</td><td colspan="2"><a href="https://dam.x.test/api/public/content/ar-2025?v=1">View Document</a></td></tr>
+    </tbody></table>"""
+    data = {"props": {"fields": {"BodyContent": {"value": grid, "editable": grid}}}}
+    html = (f'<html><body><h1>Quarterly reports</h1><div class="accordion"></div>'
+            f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script></body></html>')
+    cands, _ = extract_candidates(html, "https://x.test/en/investors/quarterly-reports")
+    titles = {c.url.rsplit("/", 1)[-1]: c.title for c in cands}
+    assert titles == {
+        "q1-deck-e322?v=fd": "Presentation – Q1 2026",
+        "q2-deck-b213?v=5e": "Presentation – Q2 2026",
+        "ar-2025?v=1": "Annual Report",  # one file in its row: the row header names it
+    }

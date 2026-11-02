@@ -11,6 +11,7 @@ This is a vendor adapter, not a company rule: it runs for any site fingerprinted
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from urllib.parse import urlsplit
 
@@ -32,6 +33,22 @@ def feed_url(page_url: str, kind: str, year: int) -> str:
     path = _EVENTS if kind == "events" else _REPORTS
     extra = "&reportTypes=" if kind == "reports" else ""
     return f"{parts.scheme}://{parts.netloc}{path}?{_QUERY.format(year=year)}{extra}"
+
+
+_DATA_PATH = re.compile(r"""data-path=["'](https?://[^"'/]+)""", re.I)
+
+
+def feed_base(pages: list[str], default: str) -> str:
+    """The URL whose host serves the feeds: the one the page's own markup names, else `default`.
+
+    A Q4 list container carries data-path="https://<tenant>.q4web.com" while the company's
+    pages live on its own domain, where /feed/ answers 404.
+    """
+    for html in pages:
+        m = _DATA_PATH.search(html)
+        if m:
+            return m.group(1) + "/"
+    return default
 
 
 def _us_date(raw: str | None) -> date | None:

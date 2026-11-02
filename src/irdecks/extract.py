@@ -1,13 +1,15 @@
 """Turn one HTML page into candidate documents, each with the context needed to judge it.
 
-Two sources are read, neither tied to a particular vendor:
+Three sources are read, none tied to a particular vendor:
   * anchors that point at a file, with the "row" of text around them;
   * object literals inside <script> blocks that carry a file URL (sites that render
-    their lists with JavaScript still ship the data in the page).
+    their lists with JavaScript still ship the data in the page);
+  * HTML stored as strings in the page's JSON data, read like the page's own anchors.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from urllib.parse import urldefrag, urljoin, urlsplit
@@ -21,7 +23,9 @@ from .models import Candidate
 _DOC_EXT = re.compile(r"\.(?:pdf|pptx?)(?:$|[?#])", re.I)
 _DOC_PATH = re.compile(
     r"/static-files/|/files-encrypted/|/system/files/|"
-    r"/doc_(?:presentations?|events?|financials?|downloads?)/", re.I,
+    r"/doc_(?:presentations?|events?|financials?|downloads?)/|"
+    r"/api/public/content/",  # Sitecore Content Hub asset links, often with no extension
+    re.I,
 )
 _FILEISH = re.compile(r"/(?:files?|media|assets|documents?|downloads?|uploads?|wp-content)/", re.I)
 _NOT_DOC_EXT = re.compile(
@@ -35,7 +39,7 @@ _ROLE_ONLY = re.compile(
     re.I,
 )
 _DECORATION = re.compile(r"[\s›»→>▸▶]+$")  # arrows that dress up a link label
-_FILESIZE = re.compile(r"\b\d+(?:\.\d+)?\s?(?:KB|MB|GB)\b", re.I)
+_FILESIZE = re.compile(r"\(?(?:PDF,?\s*)?\b\d+(?:\.\d+)?\s?(?:KB|MB|GB)\b\)?", re.I)
 _CTA = re.compile(r"\b(?:view|download|open)\s+(?:the\s+)?(?:pdf|file)\b|[›»→▸▶]", re.I)
 # clock times; the zone must be upper-case so "at 4:30 PM EDT" goes but a following word stays
 _CLOCK = re.compile(r"\b(?:at\s+)?\d{1,2}:\d{2}\s*(?:[AaPp]\.?[Mm]\.?)?(?:\s+[A-Z]{2,4}\b)?")
@@ -231,6 +235,42 @@ def _section(a: Tag, limit: int = 600) -> str:
     return ""
 
 
+def _span(cell: Tag) -> int:
+    try:
+        return max(1, int(cell.get("colspan", 1)))
+    except ValueError:
+        return 1
+
+
+def _header_at(row: Tag, col: int) -> str:
+    pos = 0
+    for cell in row.find_all(["td", "th"], recursive=False):
+        pos += _span(cell)
+        if col < pos:
+            return norm(cell.get_text(" ", strip=True))
+    return ""
+
+
+def _grid_title(a: Tag) -> str:
+    """'Presentation – Q2 2026' for a link in a grid of files: the row header, then the
+    column header and the corner cell.
+
+    Only when the row holds several files (one per period column): the row says what kind
+    of file it is and the column says which one. In a one-file row the row text names it.
+    """
+    cell = a.find_parent(["td", "th"])
+    row = cell.find_parent("tr") if cell else None
+    table = row.find_parent("table") if row else None
+    if table is None or _doc_count(row) < 2:
+        return ""
+    head = table.find("tr")
+    col = sum(_span(c) for c in cell.find_previous_siblings(["td", "th"]))
+    row_head = _header_at(row, 0)
+    if head is row or col == 0 or not row_head:
+        return ""
+    return norm(f"{row_head} – {_header_at(head, col)} {_header_at(head, 0)}")[:160]
+
+
 def _from_links(soup: BeautifulSoup, ctx: PageContext) -> list[Candidate]:
     out: dict[str, Candidate] = {}
     for a in soup.find_all("a", href=True):
@@ -253,6 +293,8 @@ def _from_links(soup: BeautifulSoup, ctx: PageContext) -> list[Candidate]:
         row_text = _strip_noise(f"{before} {after}", hit.raw if hit else "")
         if informative and not _ROLE_ONLY.match(link):
             title, quality = link, 2
+        elif not informative and (grid := _grid_title(a)):
+            title, quality = grid, 1  # "View Document" in a quarter column
         else:
             # "Download" / "Slides" says nothing: the name is in the surrounding row.
             event = row_text
@@ -377,6 +419,34 @@ def _from_scripts(soup: BeautifulSoup, ctx: PageContext) -> list[Candidate]:
     return list(out.values())
 
 
+def _json_html(soup: BeautifulSoup) -> BeautifulSoup | None:
+    """HTML that ships as strings inside the page's JSON data (Next.js `__NEXT_DATA__`).
+
+    Headless CMSs keep rich text as HTML in the page data and render it on demand: an
+    accordion of results tables shows its links only once it is opened.
+    """
+    frags: dict[str, None] = {}  # ordered and de-duplicated (CMSs repeat the field for editing)
+
+    def walk(o) -> None:
+        if isinstance(o, dict):
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+        elif isinstance(o, str) and "<a " in o and "href" in o:
+            frags[o] = None
+
+    for script in soup.find_all("script", type="application/json"):
+        try:
+            walk(json.loads(script.string or ""))
+        except ValueError:
+            continue
+    if not frags:
+        return None
+    return BeautifulSoup("".join(f"<section>{f}</section>" for f in frags), "lxml")
+
+
 # -- public ----------------------------------------------------------------------
 
 
@@ -384,6 +454,9 @@ def extract_candidates(html: str, page_url: str) -> tuple[list[Candidate], Beaut
     soup = BeautifulSoup(html, "lxml")
     ctx = page_context(soup, page_url)
     found = _from_links(soup, ctx) + _from_scripts(soup, ctx)
+    data_html = _json_html(soup)
+    if data_html is not None:
+        found += _from_links(data_html, ctx)
     for c in found:
         for hit in find_dates(c.title):
             add_evidence(c, "title", hit)
